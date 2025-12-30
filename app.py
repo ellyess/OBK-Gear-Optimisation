@@ -890,11 +890,11 @@ def make_run_signature(inventory, cfg):
 ###############################################################
 # 11) APP
 ###############################################################
-st.set_page_config(page_title="Parts Build Optimiser", layout="wide")
+st.set_page_config(page_title="OBK Gear Optimiser", layout="wide")
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
-st.title("Parts Build Optimiser")
-st.caption("Pick parts via chips. Simple priorities. Always 2 trinkets. 'View details' opens inline Stats Summary.")
+st.title("OBK Gear Optimiser")
+st.caption("Select the equipment in your inventory in the sidebar. 'View details' opens inline Stats Summary.")
 
 missing = [c for c in CATEGORIES if c not in PARTS_DATABASE]
 if missing:
