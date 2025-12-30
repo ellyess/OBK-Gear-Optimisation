@@ -309,7 +309,7 @@ div[data-testid="stSlider"] [role="slider"]{ border-color: var(--accent) !import
 
 .score-grid{
     display:grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap:7px;
     align-content:start;
 }
@@ -901,7 +901,10 @@ if missing:
     st.error(f"PARTS_DATABASE missing categories: {missing}. Paste your full database at the top of this file.")
     st.stop()
 
-names_by_cat = {cat: df_from_category(cat)["name"].tolist() for cat in CATEGORIES}
+names_by_cat = {
+    cat: sorted(df_from_category(cat)["name"].tolist(), key=lambda s: s.lower())
+    for cat in CATEGORIES
+}
 init_owned_state(names_by_cat)
 
 # Sidebar: inventory selection
