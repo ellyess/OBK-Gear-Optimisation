@@ -805,6 +805,24 @@ def part_toggle_grid(cat, names):
     return selected
 
 
+def parse_equipment_text(text):
+    """
+    Accepts one name per line OR comma-separated. Returns a set of names.
+    """
+    if not text:
+        return set()
+
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
+    parts = []
+    for line in cleaned.split("\n"):
+        parts.extend([p.strip() for p in line.split(",")])
+
+    return {p for p in parts if p}
+
+def all_part_names(names_by_cat):
+    return set().union(*[set(v) for v in names_by_cat.values()])
+
+
 ###############################################################
 # 9) RESULTS TABLE RENDER + inline details drawer
 ###############################################################
@@ -908,8 +926,66 @@ names_by_cat = {
 init_owned_state(names_by_cat)
 
 # Sidebar: inventory selection
-st.sidebar.header("1) Click to select what you have")
-inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in CATEGORIES}
+st.sidebar.header("1) Import equipment (paste list first)")
+
+paste = st.sidebar.text_area(
+    "Paste equipment list",
+    value="",
+    height=160,
+    placeholder="Advanced Engine\nFresh Exhaust\nIce Gearbox\nLucky Dice\nAir Freshener",
+)
+
+c1, c2 = st.sidebar.columns(2)
+
+with c1:
+    if st.sidebar.button("Import list (replace)", use_container_width=True):
+        wanted = parse_equipment_text(paste)
+
+        all_names = set().union(*[set(v) for v in names_by_cat.values()])
+        missing = sorted([nm for nm in wanted if nm not in all_names], key=str.lower)
+        if missing:
+            st.sidebar.warning(
+                "Unmatched names (not found in database):\n- "
+                + "\n- ".join(missing[:40])
+                + (f"\n\n(+{len(missing)-40} more)" if len(missing) > 40 else "")
+            )
+
+        # clear then apply
+        for cat, names in names_by_cat.items():
+            for nm in names:
+                st.session_state["owned"][cat][nm] = False
+
+        for cat, names in names_by_cat.items():
+            valid = set(names)
+            for nm in wanted:
+                if nm in valid:
+                    st.session_state["owned"][cat][nm] = True
+
+        st.session_state["chip_version"] += 1
+        st.rerun()
+
+with c2:
+    if st.sidebar.button("Add to current", use_container_width=True):
+        wanted = parse_equipment_text(paste)
+
+        all_names = set().union(*[set(v) for v in names_by_cat.values()])
+        missing = sorted([nm for nm in wanted if nm not in all_names], key=str.lower)
+        if missing:
+            st.sidebar.warning(
+                "Unmatched names (not found in database):\n- "
+                + "\n- ".join(missing[:40])
+                + (f"\n\n(+{len(missing)-40} more)" if len(missing) > 40 else "")
+            )
+
+        # apply without clearing
+        for cat, names in names_by_cat.items():
+            valid = set(names)
+            for nm in wanted:
+                if nm in valid:
+                    st.session_state["owned"][cat][nm] = True
+
+        st.session_state["chip_version"] += 1
+        st.rerun()
 
 # Select/Clear buttons
 st.sidebar.markdown("---")
@@ -922,10 +998,15 @@ with q2:
     if st.button("Clear all"):
         set_all_owned(False, names_by_cat)
         st.rerun()
+        
+st.sidebar.markdown("---")
+st.sidebar.header("2) Select / tweak equipment")
+inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in CATEGORIES}
+
 
 # Main priorities
 st.sidebar.markdown("---")
-st.sidebar.header("2) Priority (simple)")
+st.sidebar.header("3) What would you like to prioritise?")
 p_race = st.sidebar.selectbox("Race priority", ["Low", "Medium", "High"], index=1)
 p_coin = st.sidebar.selectbox("Coin priority", ["Low", "Medium", "High"], index=0)
 p_drift = st.sidebar.selectbox("Drift priority", ["Low", "Medium", "High"], index=0)
@@ -966,7 +1047,7 @@ top_n = st.sidebar.slider("How many results?", 1, 5, 3, 1)
 
 # Constraints (simple + advanced)
 st.sidebar.markdown("---")
-st.sidebar.header("3) Conditions")
+st.sidebar.header("4) Conditions")
 enable_constraints = st.sidebar.checkbox("Enable constraints", value=True)
 
 constraints_main = {}
