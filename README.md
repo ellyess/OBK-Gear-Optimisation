@@ -50,3 +50,9 @@ conda env create -f environment.yaml
 conda activate OBK-gear
 streamlit run app.py
 ```
+
+## Method
+
+```python
+objective = w1 * race + w2 * coin + w3 * drift + w4 * combat + raw_weights
+```
