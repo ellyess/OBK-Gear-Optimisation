@@ -1,5 +1,5 @@
 # OBK Gear Optimiser
-A visual build optimiser for OBK setups. Scoring and statistics based on <https://tarawoy.github.io/OBKGear/>.
+A visual build optimiser for OBK setups, available online <https://obk-gear-optimiser.streamlit.app/>. Scoring and statistics based on <https://tarawoy.github.io/OBKGear/>.
 
 Designed to explore optimal combinations of parts based on player priorities, constraints, and owned equipment.
 
