@@ -3,7 +3,15 @@ Application: OBK Gear Optimiser
 Author: Ellyess
 Date: 2025-12-30
 Description:
-    A Streamlit app to optimise OBK gear builds based on user-defined priorities and constraints.
+    A Streamlit app to optimise OBK gear builds (including Characters) based on user-defined priorities and constraints.
+
+IMPORTANT CHANGE (Character = Baseline):
+    - Characters are stored as ABSOLUTE baseline stats (not baseline-subtracted deltas).
+    - Optimiser *scores and optimises using GEAR GAIN only*:
+          gear_gain = (character + gear) - character
+    - The build detail panel shows BOTH:
+          1) Gear Gain (what equipment adds)
+          2) Absolute (character + equipment)
 
 Run:
     conda env create -f environment.yaml
@@ -12,16 +20,17 @@ Run:
 """
 
 import re
+import uuid
+from dataclasses import dataclass, field
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import uuid
-from dataclasses import dataclass, field
 
 
 # =========================================================
-# 1) PASTE YOUR PARTS_DATABASE HERE (keep variable name)
+# 1) PARTS DATABASE
 # =========================================================
 PARTS_DATABASE = {
     "ENGINE": [
@@ -122,10 +131,34 @@ PARTS_DATABASE = {
     ],
 }
 
-###############################################################
-# 2) CONSTANTS
-###############################################################
-CATEGORIES = ["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET"]
+
+# =========================================================
+# 2) CHARACTERS (you can edit/extend later)
+# =========================================================
+CHARACTERS_RAW = [
+    {"name": "Bulma", "Speed": 4.1, "Drift Power": 4.1, "Coin Boost": 4.1, "Handling": 4.1, "Style": 4.1},
+    {"name": "Capy", "Speed": 4.1, "Drift Power": 4.1, "Coin Boost": 4.8, "Handling": 3.9, "Style": 4.5},
+    {"name": "Chibben", "Speed": 4.3, "Drift Power": 4.1, "Coin Boost": 4.1, "Handling": 3.9, "Style": 5.1},
+    {"name": "Chimpanzee", "Speed": 4.3, "Drift Power": 4.8, "Coin Boost": 4.2, "Handling": 4.3, "Style": 3.6},
+    {"name": "CL", "Speed": 4.5, "Drift Power": 4.1, "Coin Boost": 3.6, "Handling": 4.2, "Style": 4.1},
+    {"name": "Cobie", "Speed": 5.0, "Drift Power": 3.6, "Coin Boost": 4.2, "Handling": 3.3, "Style": 3.6},
+    {"name": "Loma", "Speed": 4.4, "Drift Power": 4.1, "Coin Boost": 4.2, "Handling": 4.3, "Style": 4.4},
+    {"name": "Ohbibi", "Speed": 4.5, "Drift Power": 3.6, "Coin Boost": 4.1, "Handling": 4.1, "Style": 4.4},
+    {"name": "Ohbobot", "Speed": 5.0, "Drift Power": 4.2, "Coin Boost": 4.2, "Handling": 4.4, "Style": 4.2},
+    {"name": "Suited Shiba", "Speed": 4.2, "Drift Power": 3.9, "Coin Boost": 4.4, "Handling": 4.2, "Style": 4.8},
+    {"name": "Vanilla Gorilla", "Speed": 4.1, "Drift Power": 4.2, "Coin Boost": 3.6, "Handling": 4.8, "Style": 4.3},
+    {"name": "Zach", "Speed": 4.4, "Drift Power": 4.1, "Coin Boost": 4.1, "Handling": 4.3, "Style": 4.4},
+]
+
+# Drift Power split across tiers (mostly T3)
+DP_SPLIT = (0.15, 0.15, 0.70)  # T1, T2, T3
+assert abs(sum(DP_SPLIT) - 1.0) < 1e-6
+
+
+# =========================================================
+# 3) CONSTANTS
+# =========================================================
+CATEGORIES = ["CHARACTER", "ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET"]
 MAIN_SCORES = ["race", "coin", "drift", "combat"]
 
 RAW_STAT_KEYS = [
@@ -145,7 +178,7 @@ COIN_COEFFS = {"StartCoins": 1.0, "MaxCoins": 2.0, "CoinBoostSpd": 1.5, "CoinBoo
 DRIFT_COEFFS = {"DriftSteer": 2.0, "Steer": 1.5, "AirDriftTime": 1.0}
 COMBAT_COEFFS = {"UltCharge": 2.0, "Daze": 1.5, "SlipStreamRadius": 1.0}
 
-PRIORITY_MAP = {"Low": 0.0, "Medium": 1.0, "High": 4.0}
+PRIORITY_MAP = {"Low": 0.0, "Medium": 2.5, "High": 5.0}
 
 # Stats summary sections
 PERCENT_STATS = {"BoostPads", "SlowAreaPenalty", "DriftRate", "UltCharge", "Daze"}
@@ -186,20 +219,17 @@ STAT_SECTIONS = [
 ]
 
 
-###############################################################
-# 3) THEME CSS (app) + STATS PANEL CSS
-###############################################################
+# =========================================================
+# 4) CSS
+# =========================================================
 LEGEND_CSS = r"""
 <style>
-/* Legend container */
 .legend-wrap{
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 16px;
     padding: 12px 14px;
     background: rgba(255,255,255,0.02);
 }
-
-/* Section headings */
 .legend-h{
     font-weight: 1000;
     letter-spacing: 0.8px;
@@ -208,8 +238,6 @@ LEGEND_CSS = r"""
     font-size: 12px;
     color: rgba(190,200,220,0.72);
 }
-
-/* Stat rows */
 .legend-row{
     display:flex;
     align-items:flex-start;
@@ -218,7 +246,6 @@ LEGEND_CSS = r"""
     border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 .legend-row:last-child{ border-bottom: 0; }
-
 .legend-key{
     min-width: 160px;
     font-weight: 1000;
@@ -232,8 +259,6 @@ LEGEND_CSS = r"""
     color: rgba(210,220,238,0.82);
     line-height: 1.35;
 }
-
-/* Reuse your existing color classes */
 .legend-key.c-blue  { color: rgba(120,170,255,0.98); }
 .legend-key.c-orange{ color: rgba(255,185,90,0.98); }
 .legend-key.c-yellow{ color: rgba(255,215,90,0.98); }
@@ -254,7 +279,6 @@ APP_CSS = r"""
     --text-dim: rgba(190,200,220,0.85);
 }
 
-/* App background */
 [data-testid="stAppViewContainer"]{
     background:
         radial-gradient(1200px 700px at 18% 10%, rgba(16,54,51,0.22), rgba(0,0,0,0)),
@@ -263,7 +287,6 @@ APP_CSS = r"""
 }
 [data-testid="stHeader"]{ background: rgba(0,0,0,0); }
 
-/* Sidebar */
 [data-testid="stSidebar"]{
     background:
         radial-gradient(1000px 450px at 20% 0%, rgba(16,54,51,0.18), rgba(0,0,0,0)),
@@ -272,7 +295,6 @@ APP_CSS = r"""
 }
 section[data-testid="stSidebar"] div.block-container { padding-top: 1rem; }
 
-/* Buttons */
 .stButton>button{
     border-radius: 8px;
     border: 1px solid rgba(16,54,51,0.55);
@@ -286,7 +308,6 @@ section[data-testid="stSidebar"] div.block-container { padding-top: 1rem; }
     background: rgba(16,54,51,0.12);
 }
 
-/* ---- Chip containers (checkbox wrapper) ---- */
 div[data-testid="stCheckbox"]{
     border-radius: 6px;
     border: 1px solid rgba(16,54,51,0.55);
@@ -305,8 +326,6 @@ div[data-testid="stCheckbox"] label{
     font-weight: 900;
     letter-spacing: 0.2px;
 }
-
-/* Highlight covers the WHOLE chip border */
 div[data-testid="stCheckbox"]:has(input:checked){
     border-color: rgba(16,54,51,0.95) !important;
     background: rgba(16,54,51,0.22) !important;
@@ -321,7 +340,6 @@ div[data-testid="stCheckbox"]:has(input:checked) label{
     color: rgba(235,255,252,0.95) !important;
 }
 
-/* Sliders: remove “background card” feel */
 div[data-testid="stSlider"]{
     background: transparent !important;
     border: 0 !important;
@@ -332,137 +350,7 @@ div[data-testid="stSlider"] > div{
     background: transparent !important;
 }
 
-/* ---- Results Table (cards) ---- */
-.results-wrap{
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-}
-
-/* Ensure consistent font */
-.build-row, .build-row *{
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important;
-}
-
-.build-row{
-    display:grid;
-    grid-template-columns: 1.65fr 0.95fr;
-    gap:10px;
-    padding:9px 10px;
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.10);
-    background:
-        radial-gradient(1200px 450px at 15% 0%, rgba(16,54,51,0.16), rgba(0,0,0,0)),
-        linear-gradient(180deg, rgba(7,10,10,0.92), rgba(5,7,7,0.92));
-    box-shadow: 0 5px 5px rgba(0,0,0,0.35);
-}
-.parts-grid{
-    display:grid;
-    grid-template-columns: 1fr 1fr;
-    gap:7px 9px;
-}
-.part-chip{
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.03);
-    padding: 7px 9px;
-}
-.part-label{
-    font-size:10px;
-    letter-spacing:1px;
-    text-transform:uppercase;
-    color: rgba(190,200,220,0.65);
-    font-weight:1000;
-    margin-bottom:4px;
-}
-.part-name{
-    font-size:12px;
-    font-weight:1000;
-    letter-spacing:0.2px;
-    color: rgba(235,245,245,0.95);
-}
-
-/* scores in a 2x2 grid */
-.score-grid{
-    display:grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap:7px 9px;
-    align-content:center;
-}
-.score-pill{
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.03);
-    padding: 7px 9px;
-    box-shadow: 0 5px 5px rgba(0,0,0,0.35);
-}
-.score-head{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    margin-bottom:15px;
-}
-.score-name{
-    font-size:10px;
-    font-weight:1000;
-    letter-spacing:1.2px;
-}
-.score-val{
-    font-size:10px;
-    font-weight:1000;
-    color: rgba(235,245,245,0.92);
-}
-
-/* bar */
-.score-bar{
-    height:10px;
-    width:100%;
-    border-radius:999px;
-    background: rgba(255,255,255,0.08);
-    overflow:hidden;
-}
-.score-bar > div{
-    height:100%;
-    width: 0%;
-    border-radius:999px;
-    background: rgba(235,245,245,0.90);
-}
-
-/* Tooltip */
-.score-pill{ position: relative; }
-
-.score-pill[data-tip]:hover::after,
-.score-pill[data-tip]:hover::before{
-    z-index: 9999;
-}
-
-/* IMPORTANT: tooltip draws INSIDE the pill, so no clipping issues */
-.score-pill[data-tip]:hover::after{
-    content: attr(data-tip);
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    padding: 7px 9px;
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(10,12,12,0.95);
-    color: rgba(235,245,245,0.95);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
-    box-shadow: 0 5px 5px rgba(0,0,0,0.35);
-    pointer-events: none;
-    white-space: normal;
-}
-
-/* label colors */
-.score-race .score-name{ color: rgba(120,170,255,0.98); }
-.score-coin .score-name{ color: rgba(255,215,90,0.98); }
-.score-drift .score-name{ color: rgba(190,140,255,0.98); }
-.score-combat .score-name{ color: rgba(255,120,120,0.98); }
-
-/* badge + row header */
+/* Build badge */
 .build-badge{
     display:inline-grid;
     place-items:center;
@@ -474,69 +362,10 @@ div[data-testid="stSlider"] > div{
     font-weight:900;
     font-size:16px;
 }
-.row-head{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    margin: 0px 0 6px 0;
-}
-.row-head .title{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    color: rgba(235,245,245,0.95);
-    font-weight:1000;
-    letter-spacing:0.5px;
-}
-.row-head .hint{
-    color: rgba(190,200,220,0.65);
-    font-size:12px;
-    font-weight:800;
-}
-
-
-
-/* --- Header row: badge + button alignment (no guessing parent heights) --- */
-
-/* The column that contains the badge-wrap: center its contents vertically */
-div[data-testid="column"]:has(.badge-wrap){
-  display: flex !important;
-  align-items: center !important;
-}
-
-/* Streamlit wraps st.markdown in stMarkdown; make that wrapper also center */
-div[data-testid="column"]:has(.badge-wrap) .stMarkdown,
-div[data-testid="column"]:has(.badge-wrap) .stMarkdown > div{
-  display: flex !important;
-  align-items: center !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-/* The column that contains the viewdetails button: center it vertically and push right */
-div[data-testid="column"]:has(button[key^="viewdetails"]) {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-end !important;
-}
-
-/* If Streamlit doesn’t expose button[key=...], fallback: the 2nd column next to the badge column */
-div[data-testid="column"]:has(.badge-wrap) + div[data-testid="column"]{
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-end !important;
-}
-
-/* Optional micro-nudge so badge matches button VISUAL center */
-.badge-wrap{
-  transform: translateY(2px);
-}
-
-
-
+.badge-wrap{ display:flex; align-items:center; }
+.badge-wrap p{ margin:0 !important; }
 </style>
 """
-
 
 STATS_PANEL_CSS = """
 <style>
@@ -601,23 +430,54 @@ STATS_PANEL_CSS = """
 """
 
 
-###############################################################
-# 4) DATA + SCORING
-###############################################################
+# =========================================================
+# 5) CHAR DB BUILDER (ABSOLUTE baseline, Drift Power mostly T3)
+# =========================================================
+def build_character_database_from_raw(rows, dp_split=DP_SPLIT):
+    """
+    Characters are stored as ABSOLUTE baselines.
+    Gear adds on top; optimiser scores GEAR GAIN (totals - character).
+    """
+    t1w, t2w, t3w = dp_split
+    out = []
+    for r in rows:
+        name = str(r["name"]).strip()
+
+        spd = float(r["Speed"])
+        handling = float(r["Handling"])
+        style = float(r["Style"])
+        coin = float(r["Coin Boost"])
+        dp = float(r["Drift Power"])
+
+        stats = {
+            "Speed": spd,
+            "Steer": handling,
+            "DriftSteer": handling,
+            "TrickSpd": style,            # Style -> Trick jump stat
+            "CoinBoostSpd": coin,         # Coin Boost -> coin boost speed
+            "T1": dp * t1w,               # Drift Power -> tiers (mostly T3)
+            "T2": dp * t2w,
+            "T3": dp * t3w,
+        }
+        out.append({"name": name, "stats": stats})
+    return out
+
+
+CHARACTER_DATABASE = build_character_database_from_raw(CHARACTERS_RAW)
+
+
+# =========================================================
+# 6) DATA + SCORING
+# =========================================================
 @st.cache_data(show_spinner=False)
 def df_from_category(category, stat_keys):
-    """
-    Build a DataFrame for a category with every stat key present.
+    if category == "CHARACTER":
+        source = CHARACTER_DATABASE
+    else:
+        source = PARTS_DATABASE.get(category, [])
 
-    Args:
-        category (str): Category name in PARTS_DATABASE (e.g. "ENGINE").
-        stat_keys (tuple[str, ...]): Stat columns to include.
-
-    Returns:
-        pandas.DataFrame: DataFrame with columns ["name"] + stat_keys.
-    """
     rows = []
-    for item in PARTS_DATABASE.get(category, []):
+    for item in source:
         row = {"name": item.get("name", "")}
         stats = item.get("stats", {}) or {}
         for k in stat_keys:
@@ -629,16 +489,7 @@ def df_from_category(category, stat_keys):
     return df
 
 
-def compute_main_scores(totals):
-    """
-    Compute main scores from totals array.
-
-    Args:
-        totals (numpy.ndarray): Shape (N, len(RAW_STAT_KEYS)).
-
-    Returns:
-        dict[str, numpy.ndarray]: Keys: race/coin/drift/combat, values shape (N,).
-    """
+def compute_main_scores(totals: np.ndarray):
     Speed = totals[:, KEY2IDX["Speed"]]
     StartBoost = totals[:, KEY2IDX["StartBoost"]]
     SlipStreamSpd = totals[:, KEY2IDX["SlipStreamSpd"]]
@@ -665,16 +516,6 @@ def compute_main_scores(totals):
 
 
 def _linear_score_df(df, coeffs):
-    """
-    Compute scalar linear score for each row in df with coeffs.
-
-    Args:
-        df (pandas.DataFrame)
-        coeffs (dict[str, float])
-
-    Returns:
-        numpy.ndarray: shape (len(df),)
-    """
     if df.empty:
         return np.array([], dtype=np.float32)
     s = np.zeros(len(df), dtype=np.float32)
@@ -687,11 +528,10 @@ def _linear_score_df(df, coeffs):
 @st.cache_data(show_spinner=False)
 def compute_global_score_maxima():
     """
-    Theoretical maxima per main score across ALL equipment in PARTS_DATABASE:
-        max_engine + max_exhaust + max_suspension + max_gearbox + best_two_trinkets
+    Theoretical maxima for SCORES (0-100) are based on BEST POSSIBLE GEAR GAIN
+    (characters are baseline, not part of the "max" target).
 
-    Returns:
-        dict[str, float]: maxima for race/coin/drift/combat.
+      best ENGINE + best EXHAUST + best SUSPENSION + best GEARBOX + best_two_trinkets
     """
     stat_keys = tuple(RAW_STAT_KEYS)
     dfE = df_from_category("ENGINE", stat_keys)
@@ -721,31 +561,28 @@ def compute_global_score_maxima():
 
 
 def normalize_scores_global(df):
-    """
-    Add *_norm columns using theoretical maxima from ALL equipment.
-
-    Args:
-        df (pandas.DataFrame): must include columns in MAIN_SCORES
-
-    Returns:
-        pandas.DataFrame: adds {score}_raw, {score}_norm, {score}_max
-    """
     df = df.copy()
     max_scores = compute_global_score_maxima()
     for k in MAIN_SCORES:
         vmax = float(max_scores.get(k, 0.0))
         df[f"{k}_raw"] = df[k].astype(float)
         df[f"{k}_max"] = vmax
-        if vmax > 0:
-            df[f"{k}_norm"] = (df[k].astype(float) / vmax) * 100.0
-        else:
-            df[f"{k}_norm"] = 0.0
+        df[f"{k}_norm"] = (df[k].astype(float) / vmax) * 100.0 if vmax > 0 else 0.0
     return df
 
 
-###############################################################
-# 5) OPTIMISER
-###############################################################
+def score_from_gear_delta(totals_abs: np.ndarray, char_vec_abs: np.ndarray):
+    """
+    totals_abs includes character + gear.
+    We score using gear_gain = totals_abs - character (baseline).
+    """
+    delta = totals_abs - char_vec_abs
+    return compute_main_scores(delta)
+
+
+# =========================================================
+# 7) OPTIMISER
+# =========================================================
 @dataclass
 class OptimiseConfig:
     top_n: int = 20
@@ -754,17 +591,7 @@ class OptimiseConfig:
     constraints_main: dict = field(default_factory=dict)
 
 
-def optimise_builds(inventory, config):
-    """
-    Optimise builds from inventory and config (2 trinkets, no duplicates).
-
-    Args:
-        inventory (dict[str, list[str]]): Selected names per category.
-        config (OptimiseConfig): Weights/constraints/top_n.
-
-    Returns:
-        pandas.DataFrame: columns objective, race, coin, drift, combat, and selected parts.
-    """
+def optimise_builds(inventory, config: OptimiseConfig):
     if not config.weights_main:
         config.weights_main = {"race": 1.0, "coin": 0.0, "drift": 0.0, "combat": 0.0}
     if config.weights_raw is None:
@@ -773,6 +600,7 @@ def optimise_builds(inventory, config):
         config.constraints_main = {}
 
     stat_keys = tuple(RAW_STAT_KEYS)
+    dfC = df_from_category("CHARACTER", stat_keys)
     dfE = df_from_category("ENGINE", stat_keys)
     dfX = df_from_category("EXHAUST", stat_keys)
     dfS = df_from_category("SUSPENSION", stat_keys)
@@ -785,6 +613,8 @@ def optimise_builds(inventory, config):
             raise ValueError(f"No selected parts in {cat}. Select at least 1.")
         return out
 
+    # character is selected as a single choice (we keep it as a 1-row df)
+    dfC = _filter(dfC, inventory["CHARACTER"], "CHARACTER")
     dfE = _filter(dfE, inventory["ENGINE"], "ENGINE")
     dfX = _filter(dfX, inventory["EXHAUST"], "EXHAUST")
     dfS = _filter(dfS, inventory["SUSPENSION"], "SUSPENSION")
@@ -794,6 +624,7 @@ def optimise_builds(inventory, config):
     if len(dfT) < 2:
         raise ValueError("Select at least 2 trinkets (duplicates are not allowed).")
 
+    C_arr = dfC[RAW_STAT_KEYS].to_numpy(np.float32)   # (1, K)
     E_arr = dfE[RAW_STAT_KEYS].to_numpy(np.float32)
     X_arr = dfX[RAW_STAT_KEYS].to_numpy(np.float32)
     S_arr = dfS[RAW_STAT_KEYS].to_numpy(np.float32)
@@ -807,8 +638,12 @@ def optimise_builds(inventory, config):
     idx_s = np.tile(np.repeat(np.arange(S), G), E * X)
     idx_g = np.tile(np.arange(G), E * X * S)
 
-    base = E_arr[idx_e] + X_arr[idx_x] + S_arr[idx_s] + G_arr[idx_g]
-    nbase = base.shape[0]
+    # gear-only base
+    base_gear = E_arr[idx_e] + X_arr[idx_x] + S_arr[idx_s] + G_arr[idx_g]
+    nbase = base_gear.shape[0]
+
+    # character baseline vector
+    char_vec = C_arr[0]  # absolute baseline
 
     # unique trinket pairs (no duplicates)
     t1, t2 = np.triu_indices(T, k=1)
@@ -818,9 +653,10 @@ def optimise_builds(inventory, config):
     top_n = int(config.top_n)
 
     for p_i in range(pair_stats.shape[0]):
-        totals = base + pair_stats[p_i]
-        scores = compute_main_scores(totals)
+        totals_abs = base_gear + char_vec + pair_stats[p_i]
+        scores = score_from_gear_delta(totals_abs, char_vec)  # SCORED ON GEAR GAIN
 
+        # constraints apply to GEAR GAIN scores (same as optimiser objective)
         mask = np.ones(nbase, dtype=bool)
         for k, (lo, hi) in config.constraints_main.items():
             if lo is not None:
@@ -833,9 +669,12 @@ def optimise_builds(inventory, config):
         obj = np.zeros(nbase, dtype=np.float32)
         for k, w in config.weights_main.items():
             obj += float(w) * scores[k].astype(np.float32)
+
+        # raw stat priorities also apply to GEAR GAIN, not character baseline
         for raw, w in config.weights_raw.items():
             if raw in KEY2IDX:
-                obj += float(w) * totals[:, KEY2IDX[raw]].astype(np.float32)
+                gain = (totals_abs[:, KEY2IDX[raw]] - char_vec[KEY2IDX[raw]]).astype(np.float32)
+                obj += float(w) * gain
 
         obj[~mask] = -np.inf
         kkeep = min(top_n, int(mask.sum()))
@@ -849,6 +688,7 @@ def optimise_builds(inventory, config):
                 float(scores["coin"][i]),
                 float(scores["drift"][i]),
                 float(scores["combat"][i]),
+                dfC.loc[0, "name"],
                 dfE.loc[idx_e[i], "name"],
                 dfX.loc[idx_x[i], "name"],
                 dfS.loc[idx_s[i], "name"],
@@ -859,7 +699,7 @@ def optimise_builds(inventory, config):
 
     cols = [
         "objective", "race", "coin", "drift", "combat",
-        "ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX",
+        "CHARACTER", "ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX",
         "TRINKET_1", "TRINKET_2",
     ]
     if not results:
@@ -867,14 +707,14 @@ def optimise_builds(inventory, config):
 
     df = pd.DataFrame(results, columns=cols)
     df = df.sort_values("objective", ascending=False).drop_duplicates(
-        subset=["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET_1", "TRINKET_2"]
+        subset=["CHARACTER", "ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET_1", "TRINKET_2"]
     ).head(top_n).reset_index(drop=True)
     return df
 
 
-###############################################################
-# 6) RANGES FOR SLIDERS (advanced constraints)
-###############################################################
+# =========================================================
+# 8) RANGES FOR SLIDERS (advanced constraints)
+# =========================================================
 def _minmax(df, keys):
     mn, mx = {}, {}
     for k in keys:
@@ -905,7 +745,11 @@ def _lin_minmax(total_min, total_max, coeffs):
     return float(lo), float(hi)
 
 
-def estimate_main_score_ranges(dfE, dfX, dfS, dfG, dfT):
+def estimate_main_score_ranges(dfC, dfE, dfX, dfS, dfG, dfT):
+    """
+    Constraints are for GEAR GAIN, so ranges ignore character baseline.
+    (dfC included in signature/UI, but not used here.)
+    """
     needed = list(set(list(RACE_COEFFS) + list(COIN_COEFFS) + list(DRIFT_COEFFS) + list(COMBAT_COEFFS)))
     e_mn, e_mx = _minmax(dfE, needed)
     x_mn, x_mx = _minmax(dfX, needed)
@@ -929,9 +773,9 @@ def estimate_main_score_ranges(dfE, dfX, dfS, dfG, dfT):
     return out
 
 
-###############################################################
-# 7) STATS SUMMARY
-###############################################################
+# =========================================================
+# 9) STATS SUMMARY
+# =========================================================
 def _part_vec(cat, name):
     stat_keys = tuple(RAW_STAT_KEYS)
     df = df_from_category(cat, stat_keys)
@@ -941,9 +785,10 @@ def _part_vec(cat, name):
     return r[RAW_STAT_KEYS].to_numpy(np.float32)[0]
 
 
-def totals_for_build_row(row):
+def totals_for_build_row_abs(row):
     v = (
-        _part_vec("ENGINE", row["ENGINE"])
+        _part_vec("CHARACTER", row["CHARACTER"])
+        + _part_vec("ENGINE", row["ENGINE"])
         + _part_vec("EXHAUST", row["EXHAUST"])
         + _part_vec("SUSPENSION", row["SUSPENSION"])
         + _part_vec("GEARBOX", row["GEARBOX"])
@@ -953,16 +798,31 @@ def totals_for_build_row(row):
     return {k: float(v[KEY2IDX[k]]) for k in RAW_STAT_KEYS}
 
 
-def render_stats_summary(stats, badge_text="01"):
+def totals_for_build_row_gain(row):
+    char_v = _part_vec("CHARACTER", row["CHARACTER"])
+    abs_v = (
+        char_v
+        + _part_vec("ENGINE", row["ENGINE"])
+        + _part_vec("EXHAUST", row["EXHAUST"])
+        + _part_vec("SUSPENSION", row["SUSPENSION"])
+        + _part_vec("GEARBOX", row["GEARBOX"])
+        + _part_vec("TRINKET", row["TRINKET_1"])
+        + _part_vec("TRINKET", row["TRINKET_2"])
+    )
+    gain_v = abs_v - char_v
+    return {k: float(gain_v[KEY2IDX[k]]) for k in RAW_STAT_KEYS}
+
+
+def render_stats_summary(stats, badge_text="01", title="Stat Summary"):
     def fmt(k, v):
         return f"{v:.2f}%" if k in PERCENT_STATS else f"{v:.2f}"
 
     parts = []
     parts.append('<div class="stats-card">')
     parts.append(
-        """
+        f"""
         <div class="stats-title">
-            <h3>Stat Summary</h3>
+            <h3>{title}</h3>
         </div>
         """
     )
@@ -984,20 +844,21 @@ def render_stats_summary(stats, badge_text="01"):
     parts.append("</div>")
 
     html = STATS_PANEL_CSS + "".join(parts)
-    components_html_autosize(html, min_height=790, max_height=900, key=f"stats-{badge_text}")
+    components_html_autosize(html, min_height=790, max_height=900, key=f"stats-{badge_text}-{title}".replace(" ", "_"))
 
 
+# =========================================================
+# 10) INVENTORY STATE + IMPORT BY TEXT
+# =========================================================
+GEAR_CATEGORIES = ["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET"]  # owned categories only
 
-###############################################################
-# 8) INVENTORY STATE + IMPORT BY TEXT
-###############################################################
+
 def init_owned_state(names_by_cat):
-    """Initialize session state for owned parts (defaults unchecked)."""
     if "owned" not in st.session_state:
-        st.session_state["owned"] = {cat: {nm: False for nm in names_by_cat[cat]} for cat in CATEGORIES}
+        st.session_state["owned"] = {cat: {nm: False for nm in names_by_cat[cat]} for cat in GEAR_CATEGORIES}
     else:
         owned = st.session_state["owned"]
-        for cat in CATEGORIES:
+        for cat in GEAR_CATEGORIES:
             owned.setdefault(cat, {})
             for nm in names_by_cat[cat]:
                 owned[cat].setdefault(nm, False)
@@ -1011,9 +872,10 @@ def init_owned_state(names_by_cat):
 
 
 def set_all_owned(value, names_by_cat):
-    """Set all parts to owned/unowned and bump version to force UI update."""
     owned = st.session_state["owned"]
     for cat, names in names_by_cat.items():
+        if cat not in owned:
+            continue
         for nm in names:
             owned[cat][nm] = bool(value)
     st.session_state["chip_version"] += 1
@@ -1024,7 +886,6 @@ def on_chip_change(cat, nm, widget_key):
 
 
 def part_toggle_grid(cat, names):
-    """Render a grid of part checkboxes for a given category (alphabetical)."""
     st.sidebar.subheader(cat.title())
     cols = st.sidebar.columns(2)
     selected = []
@@ -1051,7 +912,6 @@ def part_toggle_grid(cat, names):
 
 
 def build_name_lookup(names_by_cat):
-    """lower(name) -> (cat, canonical_name). If duplicates exist across cats, mark ambiguous."""
     lookup = {}
     ambiguous = set()
     for cat, names in names_by_cat.items():
@@ -1067,30 +927,22 @@ def build_name_lookup(names_by_cat):
 
 
 def parse_import_text(text):
-    """Split by newlines/commas/semicolons; keep non-empty."""
     if not text or not text.strip():
         return []
     parts = re.split(r"[\n,;]+", text)
-    out = [p.strip() for p in parts if p.strip()]
-    return out
+    return [p.strip() for p in parts if p.strip()]
 
 
 def apply_import_replace(text, names_by_cat):
-    """
-    Replace owned equipment using pasted list.
-    Gives feedback for unknown/ambiguous names.
-    """
     tokens = parse_import_text(text)
     lookup, _ambiguous = build_name_lookup(names_by_cat)
 
-    # reset all
     owned = st.session_state["owned"]
-    for cat in CATEGORIES:
+    for cat in GEAR_CATEGORIES:
         for nm in names_by_cat[cat]:
             owned[cat][nm] = False
 
-    unknown = []
-    amb = []
+    unknown, amb = [], []
     applied = 0
 
     for t in tokens:
@@ -1102,6 +954,8 @@ def apply_import_replace(text, names_by_cat):
         if cat == "AMBIGUOUS":
             amb.append(t)
             continue
+        if cat not in GEAR_CATEGORIES:
+            continue
         owned[cat][nm] = True
         applied += 1
 
@@ -1109,105 +963,177 @@ def apply_import_replace(text, names_by_cat):
     return applied, unknown, amb
 
 
-###############################################################
-# 9) RESULTS TABLE RENDER + inline details drawer
-###############################################################
+# =========================================================
+# 11) RESULTS TABLE RENDER + inline details drawer
+# =========================================================
 def components_html_autosize(html: str, *, min_height: int = 50, max_height: int = 2000, key: str | None = None):
-    """
-    Render HTML in a Streamlit components iframe and auto-resize the iframe height to fit content.
-
-    Args:
-        html: The inner HTML you want to render.
-        min_height: Lower bound for iframe height.
-        max_height: Upper bound for iframe height.
-        key: Optional stable key; provide one if rendering in loops.
-    """
     if key is None:
         key = str(uuid.uuid4())
-
-    # We use a wrapper div with a deterministic id so JS can locate it.
     wrapper_id = f"autosize-{key}"
 
-    # The JS:
-    # - measures document height
-    # - sets iframe height via postMessage understood by Streamlit components
-    # - repeats on resize + after layout changes via ResizeObserver/MutationObserver
     rendered = f"""
     <div id="{wrapper_id}">{html}</div>
-
     <script>
     (function() {{
         const MIN_H = {int(min_height)};
         const MAX_H = {int(max_height)};
-
-        function clamp(x) {{
-            return Math.max(MIN_H, Math.min(MAX_H, x));
-        }}
+        function clamp(x) {{ return Math.max(MIN_H, Math.min(MAX_H, x)); }}
 
         function getHeight() {{
             const body = document.body;
             const html = document.documentElement;
-
-            // robust "max of everything" height calc
             const h = Math.max(
                 body.scrollHeight, body.offsetHeight,
                 html.clientHeight, html.scrollHeight, html.offsetHeight
             );
-
-            // add a small buffer to avoid scrollbars from rounding
             return clamp(h + 4);
         }}
 
         function postHeight() {{
             const height = getHeight();
-            // Streamlit listens for this message to resize the iframe
             window.parent.postMessage(
-                {{
-                    isStreamlitMessage: true,
-                    type: "streamlit:setFrameHeight",
-                    height: height
-                }},
+                {{ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height }},
                 "*"
             );
         }}
 
-        // Post height on load
         window.addEventListener("load", postHeight);
+        window.addEventListener("resize", () => requestAnimationFrame(postHeight));
 
-        // Post height on resize
-        window.addEventListener("resize", () => {{
-            // rAF to wait for layout
-            requestAnimationFrame(postHeight);
-        }});
-
-        // Observe size changes in the wrapper content
         const target = document.getElementById("{wrapper_id}") || document.body;
 
         if ("ResizeObserver" in window) {{
             const ro = new ResizeObserver(() => requestAnimationFrame(postHeight));
             ro.observe(target);
         }}
-
-        // Catch DOM mutations (e.g., font load, late-rendered elements)
         if ("MutationObserver" in window) {{
             const mo = new MutationObserver(() => requestAnimationFrame(postHeight));
             mo.observe(target, {{ childList: true, subtree: true, attributes: true, characterData: true }});
         }}
 
-        // A couple delayed posts for async rendering edge-cases
         setTimeout(postHeight, 50);
         setTimeout(postHeight, 250);
     }})();
     </script>
     """
-
-    # Give Streamlit a "safe" initial height; it will resize immediately after.
     components.html(rendered, height=min_height, scrolling=False)
-    
+
+
 def render_build_table(df):
     selected = int(st.session_state.get("selected_build_idx", -1))
     show_stats = bool(st.session_state.get("show_stats", False))
     max_scores = compute_global_score_maxima()
+
+    ROW_CARD_CSS = r"""
+    <style>
+    .build-row, .build-row *{
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important;
+    }
+    .build-row{
+        display:grid;
+        grid-template-columns: 1.65fr 0.95fr;
+        gap:10px;
+        padding:9px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background:
+            radial-gradient(1200px 450px at 15% 0%, rgba(16,54,51,0.16), rgba(0,0,0,0)),
+            linear-gradient(180deg, rgba(7,10,10,0.92), rgba(5,7,7,0.92));
+        box-shadow: 0 5px 5px rgba(0,0,0,0.35);
+    }
+    .parts-grid{
+        display:grid;
+        grid-template-columns: 1fr 1fr;
+        gap:7px 9px;
+    }
+    .part-chip{
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.03);
+        padding: 7px 9px;
+    }
+    .part-label{
+        font-size:10px;
+        letter-spacing:1px;
+        text-transform:uppercase;
+        color: rgba(190,200,220,0.65);
+        font-weight:1000;
+        margin-bottom:4px;
+    }
+    .part-name{
+        font-size:12px;
+        font-weight:1000;
+        letter-spacing:0.2px;
+        color: rgba(235,245,245,0.95);
+    }
+    .score-grid{
+        display:grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap:7px 9px;
+        align-content:center;
+    }
+    .score-pill{
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(255,255,255,0.03);
+        padding: 7px 9px;
+        box-shadow: 0 5px 5px rgba(0,0,0,0.35);
+        position: relative;
+    }
+    .score-head{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        margin-bottom:15px;
+    }
+    .score-name{
+        font-size:10px;
+        font-weight:1000;
+        letter-spacing:1.2px;
+    }
+    .score-val{
+        font-size:10px;
+        font-weight:1000;
+        color: rgba(235,245,245,0.92);
+    }
+    .score-bar{
+        height:10px;
+        width:100%;
+        border-radius:999px;
+        background: rgba(255,255,255,0.08);
+        overflow:hidden;
+    }
+    .score-bar > div{
+        height:100%;
+        width: 0%;
+        border-radius:999px;
+        background: rgba(235,245,245,0.90);
+    }
+    .score-pill[data-tip]:hover::after{
+        content: attr(data-tip);
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        padding: 7px 9px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(10,12,12,0.95);
+        color: rgba(235,245,245,0.95);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        box-shadow: 0 5px 5px rgba(0,0,0,0.35);
+        pointer-events: none;
+        white-space: normal;
+        z-index: 9999;
+    }
+    .score-race .score-name{ color: rgba(120,170,255,0.98); }
+    .score-coin .score-name{ color: rgba(255,215,90,0.98); }
+    .score-drift .score-name{ color: rgba(190,140,255,0.98); }
+    .score-combat .score-name{ color: rgba(255,120,120,0.98); }
+    </style>
+    """
 
     for i, r in df.iterrows():
         badge = str(i + 1).zfill(2)
@@ -1238,12 +1164,12 @@ def render_build_table(df):
             pct_clamped = float(np.clip(pct, 0.0, 100.0))
             width = pct_clamped
 
-            tip = f"{pct:.1f}% of Max | Raw:{raw:.1f} | Max={vmax:.1f}"
+            tip = f"{pct:.1f}% of Max Gear Gain | Raw:{raw:.1f} | Max={vmax:.1f}"
             safe_tip = (
-                    tip.replace("&", "&amp;")
-                    .replace('"', "&quot;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
+                tip.replace("&", "&amp;")
+                   .replace('"', "&quot;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
             )
 
             return f"""
@@ -1260,6 +1186,7 @@ def render_build_table(df):
         <div class="build-row">
             <div>
                 <div class="parts-grid">
+                    <div class="part-chip"><div class="part-label">CHARACTER</div><div class="part-name">{r["CHARACTER"]}</div></div>
                     <div class="part-chip"><div class="part-label">ENGINE</div><div class="part-name">{r["ENGINE"]}</div></div>
                     <div class="part-chip"><div class="part-label">EXHAUST</div><div class="part-name">{r["EXHAUST"]}</div></div>
                     <div class="part-chip"><div class="part-label">SUSPENSION</div><div class="part-name">{r["SUSPENSION"]}</div></div>
@@ -1277,18 +1204,18 @@ def render_build_table(df):
         </div>
         """
 
-        # Render inside an iframe reliably
-        components_html_autosize(APP_CSS + row_html, min_height=190, max_height=400, key=f"row-{i}")
+        components_html_autosize(ROW_CARD_CSS + row_html, min_height=220, max_height=520, key=f"row-{i}")
 
         if show_stats and selected == i:
-            stats = totals_for_build_row(r)
-            render_stats_summary(stats)
+            gain_stats = totals_for_build_row_gain(r)
+            abs_stats = totals_for_build_row_abs(r)
+            render_stats_summary(gain_stats, badge_text=badge, title="Gear Gain (adds onto character)")
+            render_stats_summary(abs_stats, badge_text=badge, title="Absolute (character + gear)")
 
 
-
-###############################################################
-# 10) RUN SIGNATURE + RESULTS CACHING
-###############################################################
+# =========================================================
+# 12) RUN SIGNATURE + RESULTS CACHING
+# =========================================================
 def make_run_signature(inventory, cfg):
     inv_sig = tuple((cat, tuple(sorted(inventory.get(cat, [])))) for cat in CATEGORIES)
     w_main_sig = tuple(sorted(cfg.weights_main.items()))
@@ -1297,32 +1224,44 @@ def make_run_signature(inventory, cfg):
     return (inv_sig, w_main_sig, w_raw_sig, c_sig, int(cfg.top_n))
 
 
-###############################################################
-# 11) APP
-###############################################################
-st.set_page_config(page_title="Parts Build Optimiser", layout="wide")
+# =========================================================
+# 13) APP
+# =========================================================
+st.set_page_config(page_title="OBK Gear Optimiser", layout="wide")
 st.markdown(APP_CSS, unsafe_allow_html=True)
 st.markdown(LEGEND_CSS, unsafe_allow_html=True)
-
 
 st.title("OBK Gear Optimiser")
 st.caption("By Ellyess")
 
-missing = [c for c in CATEGORIES if c not in PARTS_DATABASE]
+missing = [c for c in ["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET"] if c not in PARTS_DATABASE]
 if missing:
     st.error(f"PARTS_DATABASE missing categories: {missing}. Paste your full database at the top of this file.")
     st.stop()
 
 stat_keys = tuple(RAW_STAT_KEYS)
+
+# Character selection (single)
+char_names = sorted(df_from_category("CHARACTER", stat_keys)["name"].astype(str).tolist(), key=lambda x: x.lower())
+if not char_names:
+    st.error("No characters found. Fill CHARACTER_DATABASE / CHARACTERS_RAW.")
+    st.stop()
+
+st.sidebar.header("Character")
+selected_character = st.sidebar.selectbox("Pick your character", char_names, index=0)
+st.sidebar.caption(f"Character baseline is ABSOLUTE | Drift Power split: {DP_SPLIT}")
+st.sidebar.markdown("---")
+
+# Build gear lists
 names_by_cat = {
     cat: sorted(df_from_category(cat, stat_keys)["name"].astype(str).tolist(), key=lambda x: x.lower())
-    for cat in CATEGORIES
+    for cat in GEAR_CATEGORIES
 }
 init_owned_state(names_by_cat)
 
-# Sidebar: import first
-st.sidebar.header("0) Import owned equipment (paste list)")
-st.sidebar.caption("Paste names separated by newlines or commas. Unknown names will be reported.")
+# Sidebar: import first (gear only)
+st.sidebar.header("0) Import owned equipment (gear only)")
+st.sidebar.caption("Paste gear names separated by newlines or commas. Unknown names will be reported.")
 st.sidebar.text_area("Owned equipment list", key="import_text", height=120, placeholder="e.g.\nFresh Engine\nCyber Exhaust\nLucky Dice")
 
 if st.sidebar.button("Replace owned with this list", use_container_width=True):
@@ -1337,9 +1276,10 @@ if st.sidebar.button("Replace owned with this list", use_container_width=True):
 
 st.sidebar.markdown("---")
 
-# Sidebar: inventory selection
+# Sidebar: inventory selection (gear)
 st.sidebar.header("1) Click to select what you have")
-inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in CATEGORIES}
+inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in GEAR_CATEGORIES}
+inventory["CHARACTER"] = [selected_character]
 
 # Select/Clear buttons
 st.sidebar.markdown("---")
@@ -1366,7 +1306,7 @@ w_coin = PRIORITY_MAP[p_coin]
 w_drift = PRIORITY_MAP[p_drift]
 w_combat = PRIORITY_MAP[p_combat]
 
-# Raw priorities (defaults EMPTY)
+# Raw priorities (optional)
 st.sidebar.markdown("**Raw stat priorities (optional)**")
 raw_choices = [
     "TrickSpd", "AirDriftTime", "DriftSteer", "Steer",
@@ -1374,20 +1314,17 @@ raw_choices = [
     "StartCoins", "MaxCoins", "CoinBoostSpd", "CoinBoostTime",
     "UltCharge", "Daze", "SlipStreamRadius",
     "MaxCoinsSpd", "SlipTime", "UltStart", "DriftRate",
+    "T1", "T2", "T3",
 ]
 raw_choices = [x for x in raw_choices if x in KEY2IDX]
 
-selected_raw = st.sidebar.multiselect(
-    "Include these raw stats in objective",
-    raw_choices,
-    default=[],
-)
+selected_raw = st.sidebar.multiselect("Include these raw stats in objective (GEAR GAIN)", raw_choices, default=[])
 weights_raw = {}
 for raw in selected_raw:
     level = st.sidebar.selectbox(
         f"{raw} priority",
         ["Low", "Medium", "High"],
-        index=1,  # default Medium when chosen
+        index=1,
         key=f"rawprio::{raw}",
     )
     weights_raw[raw] = PRIORITY_MAP[level]
@@ -1401,7 +1338,7 @@ enable_constraints = st.sidebar.checkbox("Enable constraints", value=True)
 
 constraints_main = {}
 if enable_constraints:
-    simple_above_zero = st.sidebar.checkbox("Simple: keep scores above zero", value=False)
+    simple_above_zero = st.sidebar.checkbox("Simple: keep scores above zero (GEAR GAIN)", value=False)
     if simple_above_zero:
         constraints_main.update({
             "race": (0.0, None),
@@ -1410,13 +1347,15 @@ if enable_constraints:
             "combat": (0.0, None),
         })
 
-    with st.sidebar.expander("Advanced constraints (min/max sliders)", expanded=False):
+    with st.sidebar.expander("Advanced constraints (min/max sliders) (GEAR GAIN)", expanded=False):
+        dfC_all = df_from_category("CHARACTER", stat_keys)
         dfE_all = df_from_category("ENGINE", stat_keys)
         dfX_all = df_from_category("EXHAUST", stat_keys)
         dfS_all = df_from_category("SUSPENSION", stat_keys)
         dfG_all = df_from_category("GEARBOX", stat_keys)
         dfT_all = df_from_category("TRINKET", stat_keys)
 
+        dfC_sel = dfC_all[dfC_all["name"].isin(set(inventory["CHARACTER"]))].reset_index(drop=True)
         dfE_sel = dfE_all[dfE_all["name"].isin(set(inventory["ENGINE"]))].reset_index(drop=True)
         dfX_sel = dfX_all[dfX_all["name"].isin(set(inventory["EXHAUST"]))].reset_index(drop=True)
         dfS_sel = dfS_all[dfS_all["name"].isin(set(inventory["SUSPENSION"]))].reset_index(drop=True)
@@ -1426,7 +1365,7 @@ if enable_constraints:
         if len(dfT_sel) < 2:
             st.warning("Need at least 2 trinkets selected to use advanced constraints.")
         else:
-            ranges = estimate_main_score_ranges(dfE_sel, dfX_sel, dfS_sel, dfG_sel, dfT_sel)
+            ranges = estimate_main_score_ranges(dfC_sel, dfE_sel, dfX_sel, dfS_sel, dfG_sel, dfT_sel)
             for k in MAIN_SCORES:
                 lo, hi = ranges[k]
                 step = float(max(0.1, (hi - lo) / 200.0))
@@ -1458,7 +1397,7 @@ if last_sig is not None and current_sig != last_sig:
 
 # Run optimiser and STORE results
 if run:
-    for cat in CATEGORIES:
+    for cat in GEAR_CATEGORIES:
         if len(inventory[cat]) == 0:
             st.error(f"Select at least 1 item in {cat}.")
             st.stop()
@@ -1478,11 +1417,7 @@ if run:
         st.session_state["last_run_sig"] = None
     else:
         show = normalize_scores_global(df)
-
-        # Keep raw scores for tooltips, but display clamped 0..100 in the UI
-        # (render_build_table() uses *_raw + *_max and computes clamped % itself)
         show["objective"] = show["objective"].round(4)
-
         st.session_state["results_df"] = show.reset_index(drop=True)
         st.session_state["last_run_sig"] = current_sig
 
@@ -1491,110 +1426,44 @@ with st.expander("Stat Legend / How Stats Work", expanded=False):
         """
         <div class="legend-wrap">
             <div class="legend-h">Movement & Speed</div>
-            <div class="legend-row">
-                <div class="legend-key c-blue">Speed</div>
-                <div class="legend-val">Base speed increase.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-yellow">Boost Pads</div>
-                <div class="legend-val">Modifies the amount of speed boost pads give you.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-orange">Start Boost</div>
-                <div class="legend-val">Change in speed when successfully getting a start boost.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-cyan">SlipStream Spd</div>
-                <div class="legend-val">Extra speed while slipstreaming.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-purple">SlipStream Radius</div>
-                <div class="legend-val">Change in radius to detect a target to slipstream.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-cyan">SlipStream Time</div>
-                <div class="legend-val">Change in duration of slipstream boosts.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-red">SlowArea Penalty</div>
-                <div class="legend-val">Changes your speed on slow areas such as puddles. Higher is faster (less penalty).</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-blue">Trick Spd</div>
-                <div class="legend-val">Modifies the amount of speed while under the effect of a trickjump boost.</div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-blue">Speed</div><div class="legend-val">Base speed increase.</div></div>
+            <div class="legend-row"><div class="legend-key c-yellow">Boost Pads</div><div class="legend-val">Modifies the amount of speed boost pads give you.</div></div>
+            <div class="legend-row"><div class="legend-key c-orange">Start Boost</div><div class="legend-val">Change in speed when successfully getting a start boost.</div></div>
+            <div class="legend-row"><div class="legend-key c-cyan">SlipStream Spd</div><div class="legend-val">Extra speed while slipstreaming.</div></div>
+            <div class="legend-row"><div class="legend-key c-purple">SlipStream Radius</div><div class="legend-val">Change in radius to detect a target to slipstream.</div></div>
+            <div class="legend-row"><div class="legend-key c-cyan">SlipStream Time</div><div class="legend-val">Change in duration of slipstream boosts.</div></div>
+            <div class="legend-row"><div class="legend-key c-red">SlowArea Penalty</div><div class="legend-val">Changes your speed on slow areas such as puddles. Higher is faster (less penalty).</div></div>
+            <div class="legend-row"><div class="legend-key c-blue">Trick Spd</div><div class="legend-val">Modifies the amount of speed while under the effect of a trickjump boost.</div></div>
+
             <div class="legend-h">Handling & Drift</div>
-            <div class="legend-row">
-                <div class="legend-key c-purple">Drift Rate</div>
-                <div class="legend-val">The rate at which your drift bar fills when drifting. Higher is faster.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-purple">Drift Steer</div>
-                <div class="legend-val">Change in handling force while drifting.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-green">Steer</div>
-                <div class="legend-val">Change in handling force while NOT drifting.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-blue">AirDrift Time</div>
-                <div class="legend-val">Modifies the duration that you can maintain a drift while in the air (seconds).</div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-purple">Drift Rate</div><div class="legend-val">The rate at which your drift bar fills when drifting. Higher is faster.</div></div>
+            <div class="legend-row"><div class="legend-key c-purple">Drift Steer</div><div class="legend-val">Change in handling force while drifting.</div></div>
+            <div class="legend-row"><div class="legend-key c-green">Steer</div><div class="legend-val">Change in handling force while NOT drifting.</div></div>
+            <div class="legend-row"><div class="legend-key c-blue">AirDrift Time</div><div class="legend-val">Modifies the duration that you can maintain a drift while in the air (seconds).</div></div>
+
             <div class="legend-h">Coins & Economy</div>
-            <div class="legend-row">
-                <div class="legend-key c-yellow">Start Coins</div>
-                <div class="legend-val">Change in amount of coins you start the race with.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-orange">MaxCoins</div>
-                <div class="legend-val">Amount of coins needed to get coin boost and max coin speed.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-orange">MaxCoins Spd</div>
-                <div class="legend-val">Change in amount of speed on max coins (not CoinBoost Spd).</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-yellow">CoinBoost Spd</div>
-                <div class="legend-val">Modifies the temporary speed boost on hitting max coins.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-yellow">CoinBoost Time</div>
-                <div class="legend-val">Modifies the duration of the speed boost on hitting max coins.</div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-yellow">Start Coins</div><div class="legend-val">Change in amount of coins you start the race with.</div></div>
+            <div class="legend-row"><div class="legend-key c-orange">MaxCoins</div><div class="legend-val">Amount of coins needed to get coin boost and max coin speed.</div></div>
+            <div class="legend-row"><div class="legend-key c-orange">MaxCoins Spd</div><div class="legend-val">Change in amount of speed on max coins (not CoinBoost Spd).</div></div>
+            <div class="legend-row"><div class="legend-key c-yellow">CoinBoost Spd</div><div class="legend-val">Modifies the temporary speed boost on hitting max coins.</div></div>
+            <div class="legend-row"><div class="legend-key c-yellow">CoinBoost Time</div><div class="legend-val">Modifies the duration of the speed boost on hitting max coins.</div></div>
+
             <div class="legend-h">Combat & Abilities</div>
-            <div class="legend-row">
-                <div class="legend-key c-pink">UltCharge</div>
-                <div class="legend-val">Changes the rate at which your ultimate bar fills.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-pink">UltStart</div>
-                <div class="legend-val">Changes the amount of ultimate charge you start a race with (flat amount).</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-orange">Daze</div>
-                <div class="legend-val">Percentage change in duration of dazes inflicted on you. Higher is longer.</div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-pink">UltCharge</div><div class="legend-val">Changes the rate at which your ultimate bar fills.</div></div>
+            <div class="legend-row"><div class="legend-key c-pink">UltStart</div><div class="legend-val">Changes the amount of ultimate charge you start a race with (flat amount).</div></div>
+            <div class="legend-row"><div class="legend-key c-orange">Daze</div><div class="legend-val">Percentage change in duration of dazes inflicted on you. Higher is longer.</div></div>
+
             <div class="legend-h">Drift Tier Bonuses</div>
-            <div class="legend-row">
-                <div class="legend-key c-gray">T1</div>
-                <div class="legend-val">Amount of speed added on a tier 1 drift ignition.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-gray">T2</div>
-                <div class="legend-val">Amount of speed added on a tier 2 drift ignition.</div>
-            </div>
-            <div class="legend-row">
-                <div class="legend-key c-gray">T3</div>
-                <div class="legend-val">Amount of speed added on a tier 3 drift ignition.</div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-gray">T1</div><div class="legend-val">Amount of speed added on a tier 1 drift ignition.</div></div>
+            <div class="legend-row"><div class="legend-key c-gray">T2</div><div class="legend-val">Amount of speed added on a tier 2 drift ignition.</div></div>
+            <div class="legend-row"><div class="legend-key c-gray">T3</div><div class="legend-val">Amount of speed added on a tier 3 drift ignition.</div></div>
+
             <div class="legend-h">How scoring works</div>
-            <div class="legend-row">
-                <div class="legend-key c-gray">Scores (0–100)</div>
-                <div class="legend-val">
-                Each build’s <b>Race/Coin/Drift/Combat</b> is shown as <b>% of theoretical maximum</b> across all equipment
-                (100% = best possible build using the full database).
-                </div>
-            </div>
+            <div class="legend-row"><div class="legend-key c-gray">Scores (0–100)</div>
+            <div class="legend-val">
+                Scores are based on <b>GEAR GAIN</b> only (equipment added on top of your character).<br/>
+                100% means “best possible gear gain” using the full equipment database.
+            </div></div>
         </div>
         """,
         unsafe_allow_html=True
@@ -1603,10 +1472,10 @@ with st.expander("Stat Legend / How Stats Work", expanded=False):
 # Render cached results
 show = st.session_state.get("results_df")
 if show is None or getattr(show, "empty", True):
-    st.info("Select parts + set priorities/conditions, then click **Run optimiser**.")
+    st.info("Select gear + choose a character + set priorities/conditions, then click **Run optimiser**.")
 else:
     st.subheader("Builds")
-    st.caption("Scores are shown as 0–100 (% of theoretical maximum across all equipment). Hover a score for raw/max details.")
+    st.caption("Scores are 0–100 based on BEST POSSIBLE GEAR GAIN (not character). Hover a score for raw/max details.")
     render_build_table(show)
 
     st.download_button(
