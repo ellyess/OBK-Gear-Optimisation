@@ -146,7 +146,7 @@ COIN_COEFFS = {"StartCoins": 1.0, "MaxCoins": 2.0, "CoinBoostSpd": 1.5, "CoinBoo
 DRIFT_COEFFS = {"DriftSteer": 2.0, "Steer": 1.5, "AirDriftTime": 1.0}
 COMBAT_COEFFS = {"UltCharge": 2.0, "Daze": 1.5, "SlipStreamRadius": 1.0}
 
-PRIORITY_MAP = {"Low": 0.0, "Medium": 1.0, "High": 4.0}
+PRIORITY_MAP = {"Low": 1.0, "Medium": 2.5, "High": 5.0}
 
 # Stats summary sections
 PERCENT_STATS = {"BoostPads", "SlowAreaPenalty", "DriftRate", "UltCharge", "Daze"}
@@ -778,7 +778,7 @@ def optimise_builds(inventory, config):
         pandas.DataFrame: columns objective, race, coin, drift, combat, and selected parts.
     """
     if not config.weights_main:
-        config.weights_main = {"race": 1.0, "coin": 0.0, "drift": 0.0, "combat": 0.0}
+        config.weights_main = {"race": 1.0, "coin": 1.0, "drift": 1.0, "combat": 1.0}
     if config.weights_raw is None:
         config.weights_raw = {}
     if config.constraints_main is None:
