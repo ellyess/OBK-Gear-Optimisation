@@ -1,3 +1,5 @@
 /__pycache__
 /obk/__pycache__
 working.py
+.DS_Store
+/obk/scraped_out

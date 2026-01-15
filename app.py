@@ -174,7 +174,45 @@ for raw in selected_raw:
     )
     weights_raw[raw] = prio_to_weight(level)
 
-top_n = st.sidebar.slider("How many results?", 3, 5, 3, 1)
+top_n = st.sidebar.slider("How many results?", 3, 50, 20, 1)  # (recommend widening range)
+
+# Diversity controls
+st.sidebar.markdown("**Result diversity**")
+diverse = st.sidebar.checkbox(
+    "Diversify results by parts",
+    value=st.session_state.get("diverse", True),
+    help="Keeps results high-scoring but avoids repeating the same parts."
+)
+min_diff_parts = st.sidebar.slider(
+    "Minimum different part slots",
+    min_value=0, max_value=6,
+    value=int(st.session_state.get("min_diff_parts", 2)),
+    help="0 = off. 2–3 usually feels good."
+)
+
+use_quotas = st.sidebar.checkbox(
+    "Limit repeats of the same part (optional)",
+    value=st.session_state.get("use_quotas", False),
+)
+
+per_part_max = None
+if use_quotas:
+    max_engine = st.sidebar.slider("Max same ENGINE", 1, int(top_n), min(5, int(top_n)), 1)
+    max_gearbox = st.sidebar.slider("Max same GEARBOX", 1, int(top_n), min(6, int(top_n)), 1)
+    max_exhaust = st.sidebar.slider("Max same EXHAUST", 1, int(top_n), min(7, int(top_n)), 1)
+    max_susp = st.sidebar.slider("Max same SUSPENSION", 1, int(top_n), min(7, int(top_n)), 1)
+    per_part_max = {
+        "ENGINE": int(max_engine),
+        "GEARBOX": int(max_gearbox),
+        "EXHAUST": int(max_exhaust),
+        "SUSPENSION": int(max_susp),
+    }
+
+# Persist UI state (so it doesn't reset on rerun)
+st.session_state["diverse"] = diverse
+st.session_state["min_diff_parts"] = int(min_diff_parts)
+st.session_state["use_quotas"] = bool(use_quotas)
+st.session_state["per_part_max"] = per_part_max
 
 # Constraints
 st.sidebar.markdown("---")
@@ -288,11 +326,17 @@ cfg = OptimiseConfig(
     normalize_objective=bool(normalize_objective),
 )
 
+cfg.diverse = diverse
+cfg.min_diff_parts = min_diff_parts
+cfg.per_part_max = per_part_max
+
 current_sig = make_run_signature(inventory, cfg)
 last_sig = st.session_state.get("last_run_sig")
 if last_sig is not None and current_sig != last_sig:
     st.warning("You changed parts/priorities/conditions since the last run. Click **Run optimiser** to refresh results.")
 
+        
+# ---- Run optimisation ----
 if run:
     for cat in CATEGORIES:
         if len(inventory[cat]) == 0:

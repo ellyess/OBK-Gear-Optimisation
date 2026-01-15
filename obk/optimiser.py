@@ -21,6 +21,87 @@ class OptimiseConfig:
     constraints_raw: dict = field(default_factory=dict)
     normalize_objective: bool = True
 
+    # NEW: diversity settings
+    diverse: bool = True
+    min_diff_parts: int = 2
+    per_part_max: dict | None = None
+
+PART_COLS = ["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET_1", "TRINKET_2"]
+
+def _hamming_parts(row_a, row_b, part_cols=PART_COLS) -> int:
+    return sum(row_a[c] != row_b[c] for c in part_cols)
+
+def _diversify_by_parts(
+    df: pd.DataFrame,
+    top_n: int,
+    *,
+    min_diff_parts: int = 2,
+    per_part_max: dict | None = None,
+    part_cols=PART_COLS,
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    df = df.sort_values("objective", ascending=False).reset_index(drop=True)
+
+    selected = []
+    counts = {c: {} for c in part_cols}
+
+    def ok_quota(i: int) -> bool:
+        if not per_part_max:
+            return True
+        row = df.loc[i]
+        for col, lim in per_part_max.items():
+            if col not in part_cols or lim is None:
+                continue
+            v = row[col]
+            if counts[col].get(v, 0) >= int(lim):
+                return False
+        return True
+
+    def add(i: int):
+        row = df.loc[i]
+        selected.append(i)
+        for c in part_cols:
+            v = row[c]
+            counts[c][v] = counts[c].get(v, 0) + 1
+
+    add(0)  # best first
+    cur_min = int(min_diff_parts)
+
+    while len(selected) < int(top_n) and len(selected) < len(df):
+        picked = False
+
+        for i in range(1, len(df)):
+            if i in selected:
+                continue
+            if not ok_quota(i):
+                continue
+            row_i = df.loc[i]
+            if all(_hamming_parts(row_i, df.loc[j], part_cols) >= cur_min for j in selected):
+                add(i)
+                picked = True
+                if len(selected) >= int(top_n):
+                    break
+
+        if not picked:
+            if cur_min > 0:
+                cur_min -= 1  # relax requirement
+            else:
+                # fill remaining by objective (still respecting quotas)
+                for i in range(1, len(df)):
+                    if i in selected:
+                        continue
+                    if not ok_quota(i):
+                        continue
+                    add(i)
+                    if len(selected) >= int(top_n):
+                        break
+                break
+
+    return df.loc[selected].reset_index(drop=True)
+
+
 def optimise_builds(inventory, config):
     if not config.weights_main:
         config.weights_main = {"race": 1.0, "coin": 1.0, "drift": 1.0, "combat": 1.0}
@@ -149,7 +230,7 @@ def optimise_builds(inventory, config):
             obj += w * x
 
         obj[~mask] = -np.inf
-        kkeep = min(top_n, int(mask.sum()))
+        kkeep = min(max(top_n * 20, top_n), int(mask.sum()))
         cand = np.argpartition(obj, -kkeep)[-kkeep:]
         cand = cand[np.argsort(obj[cand])[::-1]]
 
@@ -178,6 +259,18 @@ def optimise_builds(inventory, config):
 
     df = pd.DataFrame(results, columns=cols)
     df = df.sort_values("objective", ascending=False).drop_duplicates(
-        subset=["ENGINE", "EXHAUST", "SUSPENSION", "GEARBOX", "TRINKET_1", "TRINKET_2"]
-    ).head(top_n).reset_index(drop=True)
+        subset=PART_COLS
+    ).reset_index(drop=True)
+
+    if getattr(config, "diverse", False):
+        df = _diversify_by_parts(
+            df,
+            top_n=int(top_n),
+            min_diff_parts=int(getattr(config, "min_diff_parts", 2)),
+            per_part_max=getattr(config, "per_part_max", None),
+        )
+    else:
+        df = df.head(top_n).reset_index(drop=True)
+
     return df
+

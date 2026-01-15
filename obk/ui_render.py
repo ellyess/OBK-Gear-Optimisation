@@ -5,6 +5,7 @@ UI rendering functions for the Build Optimiser app.
 import numpy as np
 import streamlit as st
 import textwrap
+import streamlit.components.v1 as components
 
 from .styles import APP_CSS
 from .constants import STAT_SECTIONS, PERCENT_STATS
@@ -61,6 +62,20 @@ def render_visual_differences_grouped(show_df, idxs):
         padding: 14px 16px;
         box-shadow: 0 5px 5px rgba(0,0,0,0.35);
         font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }}
+
+    /* Scroll container (vertical + horizontal) */
+    .diff-scroll {{
+        max-height: 70vh;
+        overflow: auto;
+        padding-right: 6px;
+        scrollbar-gutter: stable;
+        -webkit-overflow-scrolling: touch;
+    }}
+
+    /* Make sure grid doesn't squash too hard; triggers horizontal scroll when needed */
+    .diff-table {{
+        min-width: calc(170px + {n_comp} * 220px);
     }}
 
     .diff-head {{
@@ -154,6 +169,40 @@ def render_visual_differences_grouped(show_df, idxs):
         color: rgba(190,200,220,0.65);
         text-transform: uppercase;
     }}
+
+    /*  =========================
+        Themed + Autohide Scrollbar
+        ========================= */
+
+    /* Firefox: hide by default, show on hover */
+    .diff-scroll {{
+        scrollbar-width: thin;
+        scrollbar-color: rgba(120,240,255,0.0) rgba(10,14,14,0.0);
+    }}
+    .diff-scroll:hover {{
+        scrollbar-color: rgba(120,240,255,0.75) rgba(10,14,14,0.35);
+    }}
+
+    /* WebKit (Chrome/Edge/Safari) */
+    .diff-scroll::-webkit-scrollbar {{
+        width: 10px;
+        height: 10px;
+    }}
+    .diff-scroll::-webkit-scrollbar-track {{
+        background: rgba(10,14,14,0.35);
+        border-radius: 999px;
+    }}
+    .diff-scroll::-webkit-scrollbar-thumb {{
+        background: linear-gradient(180deg, rgba(120,255,200,0.90), rgba(120,240,255,0.90));
+        border-radius: 999px;
+        border: 2px solid rgba(0,0,0,0.55);
+        box-shadow: 0 0 8px rgba(120,240,255,0.35);
+        opacity: 0; /* autohide default */
+        transition: opacity 140ms ease;
+    }}
+    .diff-scroll:hover::-webkit-scrollbar-thumb {{
+        opacity: 1;
+    }}
     </style>
     """
 
@@ -165,6 +214,7 @@ def render_visual_differences_grouped(show_df, idxs):
 
     body = []
     body.append("<div class='diff-card'>")
+    body.append("<div class='diff-scroll'><div class='diff-table'>")
     body.extend(head)
 
     for sec, icon, rows in STAT_SECTIONS:
@@ -180,10 +230,11 @@ def render_visual_differences_grouped(show_df, idxs):
 
             for d in deltas:
                 width = min(50.0, (abs(d) / max_abs) * 50.0)
-                if d >= 0:
-                    bar = f"<div class='delta-bar-pos' style='width:{width:.2f}%;'></div>"
-                else:
-                    bar = f"<div class='delta-bar-neg' style='width:{width:.2f}%;'></div>"
+                bar = (
+                    f"<div class='delta-bar-pos' style='width:{width:.2f}%;'></div>"
+                    if d >= 0 else
+                    f"<div class='delta-bar-neg' style='width:{width:.2f}%;'></div>"
+                )
 
                 suffix = "%" if stat in PERCENT_STATS else ""
                 cell = f"""
@@ -200,12 +251,15 @@ def render_visual_differences_grouped(show_df, idxs):
 
             body.append("</div>")
 
-    body.append("</div>")
-    html = DIFF_CSS + "".join(body)
+    body.append("</div></div>")  # close diff-table + diff-scroll
+    body.append("</div>")        # close diff-card
 
+    html = DIFF_CSS + "<div id='diff-root'>" + "".join(body) + "</div>"
+
+    # Fixed iframe height; internal scroll handles overflow
     components_html_autosize(
         html,
-        min_height=520,
+        min_height=900,
         max_height=1700,
         key=f"diff-{base_i}-{'-'.join(map(str, comp_is))}"
     )

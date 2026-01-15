@@ -118,10 +118,23 @@ def apply_import_replace(text, names_by_cat):
 
 def make_run_signature(inventory, cfg):
     inv_sig = tuple((cat, tuple(sorted(inventory.get(cat, [])))) for cat in CATEGORIES)
-    w_main_sig = tuple(sorted(cfg.weights_main.items()))
-    w_raw_sig = tuple(sorted(cfg.weights_raw.items()))
-    c_main_sig = tuple(sorted((k, cfg.constraints_main.get(k, (None, None))) for k in MAIN_SCORES))
-    c_raw_sig = tuple(sorted((k, cfg.constraints_raw.get(k, (None, None))) for k in RAW_STAT_KEYS))
+    w_main_sig = tuple(sorted((cfg.weights_main or {}).items()))
+    w_raw_sig = tuple(sorted((cfg.weights_raw or {}).items()))
+    c_main_sig = tuple(sorted((k, (cfg.constraints_main or {}).get(k, (None, None))) for k in MAIN_SCORES))
+    c_raw_sig = tuple(sorted((k, (cfg.constraints_raw or {}).get(k, (None, None))) for k in RAW_STAT_KEYS))
     preset_sig = str(st.session_state.get("preset_name", "Custom"))
     norm_sig = bool(getattr(cfg, "normalize_objective", True))
-    return (inv_sig, w_main_sig, w_raw_sig, c_main_sig, c_raw_sig, preset_sig, int(cfg.top_n), norm_sig)
+
+    # ---- NEW: diversity signature ----
+    diverse_sig = bool(getattr(cfg, "diverse", False))
+    min_diff_sig = int(getattr(cfg, "min_diff_parts", 0))
+
+    ppm = getattr(cfg, "per_part_max", None) or {}
+    # stable ordering for hashing
+    per_part_max_sig = tuple(sorted((str(k), int(v)) for k, v in ppm.items()))
+
+    return (
+        inv_sig, w_main_sig, w_raw_sig, c_main_sig, c_raw_sig,
+        preset_sig, int(cfg.top_n), norm_sig,
+        diverse_sig, min_diff_sig, per_part_max_sig,
+    )
