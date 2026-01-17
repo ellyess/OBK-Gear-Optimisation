@@ -5,7 +5,7 @@ UI rendering functions for the Build Optimiser app.
 import numpy as np
 import streamlit as st
 import textwrap
-import streamlit.components.v1 as components
+
 
 from .styles import APP_CSS
 from .constants import STAT_SECTIONS, PERCENT_STATS
