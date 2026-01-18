@@ -225,26 +225,32 @@ def main():
     # Coefficient SIGN is the single source of truth for direction.
     score_specs = [
         ScoreSpec("race", {
-            "Speed": 2.0,
-            "StartBoost": 1.5,
-            "SlipStreamSpd": 1.2,
-            ("SlowDownSpd" if USE_SLOWDOWNSPD_NAME else "SlowAreaPenalty"): 1.0,
+            "Speed": 2.8407310966678576,
+            "SlipStreamSpd": 0.6266318396389959,
+            "StartBoost": 0.42610965095451725,
+            "SlowDownSpd": 0.10652741273862931,   # higher is better
+            "BoostPads": 1.0,
+            "TrickSpd": 1.0,
         }),
         ScoreSpec("coin", {
-            "StartCoins": 1.0,
-            "MaxCoins": -2.0,          # lower is better => negative
-            "CoinBoostSpd": 1.5,
-            "CoinBoostTime": 1.5,
+            "CoinBoostTime": 2.376095084387809,
+            "StartCoins": 0.8078722947015423,
+            "CoinBoostSpd": 0.4488179415008568,
+            "MaxCoins": -0.36721467940979197,     # lower is better
         }),
         ScoreSpec("drift", {
-            "DriftSteer": 2.0,
-            "Steer": 1.5,
-            "AirDriftTime": 1.0,
+            "AirDriftTime": 2.5183690692408747,
+            "Steer": 0.25610533511237527,
+            "DriftSteer": 0.22552559564674984,
+            "DriftRate": 0.1214930052951624,      # higher is better
+            "T1": 1.0,
+            "T2": 1.0,
+            "T3": 1.0,
         }),
         ScoreSpec("combat", {
-            "UltCharge": 2.0,
-            "Daze": -1.5,              # lower is better => negative
-            "SlipStreamRadius": 1.0,
+            "UltCharge": 1.7704918032786885,
+            "SlipStreamRadius": 0.7377049180327868,
+            "Daze": -0.4918032786885246,          # lower is better (as currently set)
         }),
     ]
 

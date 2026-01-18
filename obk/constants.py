@@ -16,15 +16,15 @@ RAW_STAT_KEYS = [
 RAW_STAT_KEYS = list(dict.fromkeys(RAW_STAT_KEYS))
 KEY2IDX = {k: i for i, k in enumerate(RAW_STAT_KEYS)}
 
-# COEFFS from compute_sensitivities.py
-RACE_COEFFS = {'Speed': 2.8407310966678576, 'SlipStreamSpd': 0.6266318396389959, 'StartBoost': 0.42610965095451725, 'SlowDownSpd': 0.10652741273862931}
-COIN_COEFFS = {'CoinBoostTime': 2.376095084387809, 'StartCoins': 0.8078722947015423, 'CoinBoostSpd': 0.4488179415008568, 'MaxCoins': -0.36721467940979197}
-DRIFT_COEFFS = {'AirDriftTime': 2.5183690692408747, 'Steer': 0.25610533511237527, 'DriftSteer': 0.22552559564674984}
+# COEFFS from compute_sensitivities.py # NEW: drift tier bonuses contribute to drift score
+RACE_COEFFS = {'Speed': 3.185464930494821, 'TrickSpd': 1.1164012450986174, 'SlipStreamSpd': 0.7026760652716805, 'StartBoost': 0.47781972438474274, 'BoostPads': 0.39818310365395226, 'SlowDownSpd': 0.11945493109618568}
+COIN_COEFFS = {'CoinBoostTime': 2.376095084387809, 'StartCoins': 0.8078722947015423, 'CoinBoostSpd': 0.44881794150085674, 'MaxCoins': -0.3672146794097919}
+DRIFT_COEFFS = {'AirDriftTime': 3.9717988089786647, 'T2': 0.6619664572030347, 'T3': 0.5884146686765579, 'T1': 0.5416089492850047, 'DriftRate': 0.4766158760164524, 'Steer': 0.40391175280715846, 'DriftSteer': 0.3556834870331271}
 COMBAT_COEFFS = {'UltCharge': 1.7704918032786885, 'SlipStreamRadius': 0.7377049180327868, 'Daze': -0.4918032786885246}
 
 PRIORITY_MAP = {"Low": 1.0, "Medium": 2.5, "High": 5.0}
 
-RAW_MINIMISE = {"MaxCoins"}  # used in UI hints
+RAW_MINIMISE = {"MaxCoins", "Daze"}  # used in UI hints
 
 RAW_CONSTRAINT_DEFAULTS = {
     "Speed": (0.0, None),

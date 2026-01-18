@@ -56,7 +56,7 @@ names_by_cat = {
 init_owned_state(names_by_cat)
 
 # Sidebar: import first
-st.sidebar.header("0) Import owned equipment (paste list)")
+st.sidebar.header("Import owned equipment (paste list)")
 st.sidebar.caption("Paste names separated by newlines or commas. Unknown names will be reported.")
 st.sidebar.text_area(
     "Owned equipment list",
@@ -75,14 +75,7 @@ if st.sidebar.button("Replace owned with this list", use_container_width=True):
         st.sidebar.success(f"Applied {applied} items.")
     st.rerun()
 
-st.sidebar.markdown("---")
-
-# Sidebar: inventory selection
-st.sidebar.header("1) Click to select what you have")
-inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in CATEGORIES}
-
 # Select/Clear buttons
-st.sidebar.markdown("---")
 q1, q2 = st.sidebar.columns(2)
 with q1:
     if st.button("Select all"):
@@ -92,17 +85,18 @@ with q2:
     if st.button("Clear all"):
         set_all_owned(False, names_by_cat)
         st.rerun()
+        
+# Sidebar: inventory selection
+st.sidebar.header("Select owned equipment")
+inventory = {cat: part_toggle_grid(cat, names_by_cat[cat]) for cat in CATEGORIES}
+
+
 
 # Priorities
 st.sidebar.markdown("---")
-st.sidebar.header("2) Priority")
+st.sidebar.header("Priority")
 st.sidebar.caption("Higher priority means the optimiser will favour builds that perform better in that area. (Low = 1.0x, Medium = 2.5x, High = 5x)")
 
-normalize_objective = st.sidebar.checkbox(
-    "Normalise stats (recommended)",
-    value=True,
-    help="When enabled, optimisation uses 0–1 normalised values (based on achievable ranges from your selected inventory). This avoids mixed-unit stats dominating the objective."
-)
 
 # Preset UI
 preset_name = st.sidebar.selectbox("Preset", list(PRESETS.keys()), key="preset_name")
@@ -145,13 +139,7 @@ w_combat = prio_weight_from_state("prio_combat", "Low")
 
 # Raw priorities (optional)
 st.sidebar.markdown("**Raw stat priorities (optional)**")
-raw_choices = [
-    "TrickSpd", "AirDriftTime", "DriftSteer", "Steer",
-    "Speed", "StartBoost", "SlipStreamSpd",
-    "StartCoins", "MaxCoins", "CoinBoostSpd", "CoinBoostTime",
-    "UltCharge", "Daze", "SlipStreamRadius",
-    "MaxCoinsSpd", "SlipTime", "UltStart", "DriftRate",
-]
+raw_choices = list(RAW_STAT_KEYS)
 raw_choices = [x for x in raw_choices if x in KEY2IDX]
 
 selected_raw = st.sidebar.multiselect(
@@ -174,50 +162,18 @@ for raw in selected_raw:
     )
     weights_raw[raw] = prio_to_weight(level)
 
-top_n = st.sidebar.slider("How many results?", 3, 50, 20, 1)  # (recommend widening range)
+st.sidebar.markdown("---")
+st.sidebar.header("Optimiser Settings")
 
-# Diversity controls
-st.sidebar.markdown("**Result diversity**")
-diverse = st.sidebar.checkbox(
-    "Diversify results by parts",
-    value=st.session_state.get("diverse", True),
-    help="Keeps results high-scoring but avoids repeating the same parts."
-)
-min_diff_parts = st.sidebar.slider(
-    "Minimum different part slots",
-    min_value=0, max_value=6,
-    value=int(st.session_state.get("min_diff_parts", 2)),
-    help="0 = off. 2–3 usually feels good."
+normalize_objective = st.sidebar.checkbox(
+    "Normalise stats (recommended)",
+    value=True,
+    help="When enabled, optimisation uses 0–1 normalised values (based on achievable ranges from your selected inventory). This avoids mixed-unit stats dominating the objective."
 )
 
-use_quotas = st.sidebar.checkbox(
-    "Limit repeats of the same part (optional)",
-    value=st.session_state.get("use_quotas", False),
-)
-
-per_part_max = None
-if use_quotas:
-    max_engine = st.sidebar.slider("Max same ENGINE", 1, int(top_n), min(5, int(top_n)), 1)
-    max_gearbox = st.sidebar.slider("Max same GEARBOX", 1, int(top_n), min(6, int(top_n)), 1)
-    max_exhaust = st.sidebar.slider("Max same EXHAUST", 1, int(top_n), min(7, int(top_n)), 1)
-    max_susp = st.sidebar.slider("Max same SUSPENSION", 1, int(top_n), min(7, int(top_n)), 1)
-    per_part_max = {
-        "ENGINE": int(max_engine),
-        "GEARBOX": int(max_gearbox),
-        "EXHAUST": int(max_exhaust),
-        "SUSPENSION": int(max_susp),
-    }
-
-# Persist UI state (so it doesn't reset on rerun)
-st.session_state["diverse"] = diverse
-st.session_state["min_diff_parts"] = int(min_diff_parts)
-st.session_state["use_quotas"] = bool(use_quotas)
-st.session_state["per_part_max"] = per_part_max
 
 # Constraints
-st.sidebar.markdown("---")
-st.sidebar.header("3) Conditions")
-enable_constraints = st.sidebar.checkbox("Enable constraints", value=True)
+enable_constraints = st.sidebar.checkbox("Enable constraints", value=True, help="Set minimum/maximum allowed scores for the builds.")
 
 preset_constraints_main = dict(st.session_state.get("preset_constraints_main", {}) or {})
 preset_constraints_raw = dict(st.session_state.get("preset_constraints_raw", {}) or {})
@@ -315,6 +271,53 @@ if enable_constraints:
                 if vmin > lo or vmax < hi:
                     constraints_raw[raw] = (float(vmin), float(vmax))
 
+# Result options
+st.sidebar.markdown("**Result Options**")
+top_n = st.sidebar.slider("How many results?", 3, 50, 20, 1)  # (recommend widening range)
+# Diversity controls
+diverse = st.sidebar.checkbox(
+    "Diversify results by parts",
+    value=st.session_state.get("diverse", True),
+    help="Keeps results high-scoring but avoids repeating the same parts."
+)
+
+min_diff_parts = 0
+per_part_max = None
+use_quotas = False
+if diverse:
+    min_diff_parts = st.sidebar.slider(
+        "Minimum different part slots",
+        min_value=0, max_value=6,
+        value=int(st.session_state.get("min_diff_parts", 2)),
+        help="0 = off. 2–3 usually feels good."
+    )
+
+    use_quotas = st.sidebar.checkbox(
+        "Limit repeats of the same part",
+        value=st.session_state.get("use_quotas", False),
+    )
+
+    per_part_max = None
+    if use_quotas:
+        max_engine = st.sidebar.slider("Max same ENGINE", 1, int(top_n), min(5, int(top_n)), 1)
+        max_gearbox = st.sidebar.slider("Max same GEARBOX", 1, int(top_n), min(6, int(top_n)), 1)
+        max_exhaust = st.sidebar.slider("Max same EXHAUST", 1, int(top_n), min(7, int(top_n)), 1)
+        max_susp = st.sidebar.slider("Max same SUSPENSION", 1, int(top_n), min(7, int(top_n)), 1)
+        per_part_max = {
+            "ENGINE": int(max_engine),
+            "GEARBOX": int(max_gearbox),
+            "EXHAUST": int(max_exhaust),
+            "SUSPENSION": int(max_susp),
+        }
+
+# Persist UI state (so it doesn't reset on rerun)
+st.session_state["diverse"] = diverse
+st.session_state["min_diff_parts"] = int(min_diff_parts)
+st.session_state["use_quotas"] = bool(use_quotas)
+st.session_state["per_part_max"] = per_part_max
+
+# Run button
+st.sidebar.markdown("---")
 run = st.sidebar.button("Run optimiser", type="primary")
 
 cfg = OptimiseConfig(

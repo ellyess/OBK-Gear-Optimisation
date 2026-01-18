@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .constants import RAW_STAT_KEYS, KEY2IDX
+from .constants import RAW_STAT_KEYS, KEY2IDX, RAW_MINIMISE
 from .data import df_from_category
 from .scoring import compute_main_scores
 from .ranges import estimate_main_score_ranges, estimate_raw_stat_ranges
+
+
 
 @dataclass
 class OptimiseConfig:
@@ -131,7 +133,7 @@ def optimise_builds(inventory, config):
     dfG = _filter(dfG, inventory["GEARBOX"], "GEARBOX")
     dfT = _filter(dfT, inventory["TRINKET"], "TRINKET")
 
-    MINIMISE_RAW = {"MaxCoins", "Daze"}  # lower is better for these
+    MINIMISE_RAW = set(RAW_MINIMISE)
 
     def _minmax_norm(x, lo, hi):
         denom = (hi - lo)
